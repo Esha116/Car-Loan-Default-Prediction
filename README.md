@@ -1,6 +1,9 @@
 # Car-Loan-Default-Prediction
 This machine learning project aimed at predicting car loan defaults for a Non-Bank Financial Company (NBFC). The project focuses on optimizing expected gross profit by leveraging customer characteristics to assess loan repayment probabilities.
 
+# Tools & Techniques:
+R Studio
+
 # Key Features:
 ## 1.Business Context:
 To address a surge in car loan defaults (15-year high) by predicting loan repayment capabilities.
