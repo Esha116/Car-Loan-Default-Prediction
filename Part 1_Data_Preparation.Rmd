@@ -1,0 +1,290 @@
+---
+title: "Data Science for Business Project Part 1"
+subtitle: Section C Team 59Esrat Esha, Santiago de la Flor Giuffra, Shrirang Ojha,
+  Yining Zhang, Zoe Li
+output: html_notebook
+---
+
+#1. Importing libraries
+
+```{r}
+#We added some functions to the files below
+source("DataAnalyticsFunctions.R")
+source("PerformanceCurves.R")
+
+library(tree)
+library(tidyverse)
+library(tibble)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(reshape2) 
+library(corrplot)
+library(RColorBrewer)
+library(quantreg)
+library(car)
+library(mice)
+library(glmnet)
+library(tree)
+library(partykit)
+library(randomForest)
+library(missForest)
+library(VIM)
+```
+
+#2. Data Understanding
+
+##2.1.Loading Data Dictonary
+
+```{r}
+#We added some functions to the files below
+
+data_dictionary<-read.csv("Data_Dictionary.csv")
+data_dictionary
+```
+
+##2.2.Loading the main dataset
+
+```{r}
+#As the compettion in Kaggle already closed, we only have access to the train dataset.
+#We will split it into train and test on further steps.
+dataset<- read_csv('Train_Dataset.csv')
+dataset
+```
+
+##2.3.Column exploration
+
+```{r}
+str(dataset)
+```
+
+#3. Data Preparation
+
+##3.1 Transformation of char columns
+
+```{r}
+#From str(dataset),we can notice below that there is a few columns that are being considered as characters that need to be transformed to integers or floats. 
+
+dataset <- dataset %>%
+  mutate(
+    Population_Region_Relative = as.numeric(Population_Region_Relative),
+    Age_Days = as.integer(Age_Days),
+    Employed_Days = as.integer(Employed_Days),
+    Registration_Days = as.integer(Registration_Days),
+    ID_Days = as.integer(ID_Days)
+  )
+
+#As the warnings suggest, we have introduced NA's to the columns. On a later step, we will focus on addressing the NA's for this and other columns.
+```
+
+##3.2 First check of NA values
+
+```{r}
+na_percentage <- dataset %>%
+  summarise(across(everything(), ~ sum(is.na(.)) / length(.) * 100)) %>%
+  pivot_longer(cols = everything(), names_to = "Column", values_to = "NA_Percentage") %>%
+  arrange(desc(NA_Percentage))
+
+print(na_percentage)
+```
+
+##3.2 Eliminating unnecesary columns
+
+```{r}
+#The columns below will be dropped because they do not hold importance for our analysis and also hold NAs.
+#We are also dropping columns that have a substancial amount of NAs
+
+#Not relevant for our analysis
+dataset <- subset(dataset, select = -Accompany_Client)
+dataset <- subset(dataset, select = -Application_Process_Hour)
+dataset <- subset(dataset, select = -Application_Process_Day)
+dataset <- subset(dataset, select = -Type_Organization)
+dataset<-subset(dataset, select= -Score_Source_2)
+dataset <- subset(dataset, select = -Mobile_Tag)	
+
+#Substancial amount of NAs
+dataset <- subset(dataset, select = -Own_House_Age)
+dataset <- subset(dataset, select = -Score_Source_1)
+dataset <- subset(dataset, select = -Social_Circle_Default)
+dataset <- subset(dataset, select = -Score_Source_3)		
+dataset <- subset(dataset, select = -Credit_Bureau)	
+```
+
+##3.3 Converting columns without NAs into factors
+
+```{r}
+dataset$Client_Permanent_Match_Tag<-as.factor(dataset$Client_Permanent_Match_Tag)
+dataset$Client_Contact_Work_Tag<-as.factor(dataset$Client_Contact_Work_Tag)
+dataset$Default <- as.factor(dataset$Default)
+```
+
+##3.4 Handling NAs for Categorical columns
+
+### a) Strategy 1 for NA: Converting to a Did not disclose factor
+
+####Client_Income_Type
+
+```{r}
+# Initial column repetition
+print("Initial columns")
+table(dataset$Client_Income_Type, useNA = "ifany")
+
+# Replac NA values with "Income not Disclosed"
+dataset$Client_Income_Type <- ifelse(is.na(dataset$Client_Income_Type), "Income not Disclosed", dataset$Client_Income_Type)
+
+# These are the four categories we want to keep
+categories_to_keep <- c("Commercial", "Service", "Retired", "Govt Job")
+
+# Replace other categories with "Other or Income not Disclosed"
+dataset$Client_Income_Type <- ifelse(dataset$Client_Income_Type %in% categories_to_keep, 
+                                     dataset$Client_Income_Type, 
+                                     "Other or Income not Disclosed")
+
+# # Convert the column to factor
+dataset$Client_Income_Type <- as.factor(dataset$Client_Income_Type)
+
+# New column repetition
+print("New columns")
+table(dataset$Client_Income_Type, useNA = "ifany")
+```
+
+####Client_Education
+
+```{r}
+## Initial column repetition
+print("Initial columns")
+table(dataset$Client_Education, useNA = "ifany")
+
+# Replace NA values with "Client Education Not Disclosed"
+dataset$Client_Education <- ifelse(is.na(dataset$Client_Education), "Client Education Not Disclosed", dataset$Client_Education)
+# Combine "Graduation" and "Post Grad" into one category: "Grad and Post Grad"
+dataset$Client_Education <- ifelse(dataset$Client_Education %in% c("Graduation", "Post Grad"), 
+                                   "Grad and Post Grad", 
+                                   dataset$Client_Education)
+
+# Convert the column to factor
+dataset$Client_Education <- as.factor(dataset$Client_Education)
+
+# New column repetition
+print("New columns")
+table(dataset$Client_Education, useNA = "ifany")
+```
+
+####Marital Status
+
+```{r}
+## Initial column repetition
+print("Intial columns")
+table(dataset$Client_Marital_Status, useNA = "ifany")
+
+# Replace NA values with "Marital Status Not Disclosed"
+dataset$Client_Marital_Status <- ifelse(is.na(dataset$Client_Marital_Status), "Marital Status Not Disclosed", dataset$Client_Marital_Status)
+
+# Convert the column to factor
+dataset$Client_Marital_Status <- as.factor(dataset$Client_Marital_Status)
+
+# New column repetition
+print("New columns")
+table(dataset$Client_Marital_Status, useNA = "ifany")
+```
+
+####Client_Housing_Type
+
+```{r}
+## Initial column repetition
+print("Intial columns")
+table(dataset$Client_Housing_Type, useNA = "ifany")
+
+# Replace NA values with "Housing Type Not Disclosed"
+dataset$Client_Housing_Type <- ifelse(is.na(dataset$Client_Housing_Type), "Housing Type Not Disclosed", dataset$Client_Housing_Type)
+
+# Convert the column to factor
+dataset$Client_Housing_Type <- as.factor(dataset$Client_Housing_Type)
+
+# New column repetition
+print("New columns")
+table(dataset$Client_Housing_Type, useNA = "ifany")
+```
+
+###Client_Occupation We will replace NA values with Occupation_Type_Not_Disclosed dummy
+
+```{r}
+## Initial column repetition
+print("Intial columns")
+table(dataset$Client_Occupation, useNA = "ifany")
+
+# Replace NA values with "Occupation Type Not Disclosed"
+dataset$Client_Occupation <- ifelse(is.na(dataset$Client_Occupation), "Occupation Type Not Disclosed", dataset$Client_Occupation)
+
+#Keeping on
+frequency_table<-data.frame(table(dataset$Client_Occupation)) %>%  
+  filter(Freq>2000)
+categories_to_keep <- c(frequency_table$Var1) 
+
+# Replace other categories with "Other"
+dataset$Client_Occupation <- ifelse(dataset$Client_Occupation %in% categories_to_keep, 
+                                     dataset$Client_Occupation, 
+                                     "Other")
+# New column repetition
+print("New columns")
+table(dataset$Client_Occupation, useNA = "ifany")
+```
+
+### b) Strategy 2 for NA: Dropping the records
+
+####Client_Gender
+
+```{r}
+#We have signifcantly less NA values here, therefore, we decide to drop the records
+
+# Initial column repetition
+print("Intial columns")
+table(dataset$Client_Gender, useNA = "ifany")
+
+#Removing XNA and Client Gender
+dataset <- subset(dataset, Client_Gender != 'XNA')
+dataset <- subset(dataset, !is.na(Client_Gender))
+
+#Converting the columns into factors
+dataset$Client_Gender <- as.factor(dataset$Client_Gender)
+
+# New column repetition
+print("New columns")
+table(dataset$Client_Gender, useNA = "ifany")
+```
+
+###c) Strategy 3 for NA: Replacing with mode
+
+####Loan_Contract_Type
+
+```{r}
+#As the loan contract type has to be disclosed, we will replace the NA values with the mode
+
+# Initial column repetition
+print("Intial columns")
+table(dataset$Loan_Contract_Type, useNA = "ifany")
+
+#Converting NAs into CL
+dataset$Loan_Contract_Type <- ifelse(is.na(dataset$Loan_Contract_Type), "CL", dataset$Loan_Contract_Type)
+
+#Converting the columns into factor
+dataset$Loan_Contract_Type <- as.factor(dataset$Loan_Contract_Type)
+
+# New column repetition
+print("New columns")
+table(dataset$Loan_Contract_Type, useNA = "ifany")
+```
+
+##3.5. Data Preparation for Numerical columns
+
+```{r}
+#For the numerical values (Less than 5% of NAs), we took a different approach and used mice with a car with 10 iterations
+No_NA_dfs <- mice(dataset,m=1,maxit=10,meth='cart',seed=300)
+```
+
+##3.6. Saving the new clean dataframe
+
+```{r}
+complete(No_NA_dfs, 1)
+write.csv(complete(No_NA_dfs, 1), "Clean_data.csv")
+```

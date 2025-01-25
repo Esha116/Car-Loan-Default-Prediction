@@ -1,0 +1,281 @@
+---
+title: "Data Science for Business Project Part 2"
+subtitle: Section C Team 59Esrat Esha, Santiago de la Flor Giuffra, Shrirang Ojha,
+  Yining Zhang, Zoe Li
+output: html_notebook
+---
+
+#4. Modelling
+
+##4.1 Loading libraries
+```{r}
+#We added some functions to the files below
+source("DataAnalyticsFunctions.R")
+source("PerformanceCurves.R")
+
+library(tree)
+library(tidyverse)
+library(tibble)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(reshape2) 
+library(corrplot)
+library(RColorBrewer)
+library(quantreg)
+library(car)
+library(mice)
+library(glmnet)
+library(tree)
+library(partykit)
+library(randomForest)
+library(missForest)
+library(VIM)
+
+```
+
+##4.2 Loading the clean dataset and converting columns
+```{r}
+data<-read_csv('Clean_data.csv')
+
+# Convert selected columns to factors
+data <- data %>%
+  mutate(
+    Client_Income_Type = as.factor(Client_Income_Type),
+    Client_Education = as.factor(Client_Education),
+    Client_Marital_Status = as.factor(Client_Marital_Status),
+    Client_Gender = as.factor(Client_Gender),
+    Loan_Contract_Type = as.factor(Loan_Contract_Type),
+    Client_Housing_Type = as.factor(Client_Housing_Type),
+    Client_Occupation = as.factor(Client_Occupation),
+    Client_Permanent_Match_Tag = as.factor(Client_Permanent_Match_Tag),
+    Client_Contact_Work_Tag = as.factor(Client_Contact_Work_Tag),
+    Default = as.factor(Default)
+  )
+str(data)
+```
+
+##4.3 Splitting between training and testing dataset
+```{r}
+set.seed(500)
+#100k will be our train dataset
+train_data <- data[sample(nrow(data), 100000), ]
+
+#The rest (around 19k) will be our test dataset
+test_data <- anti_join(data, train_data, by = "ID")
+
+#Removing ID columns
+data=data[, 3:30]
+train_data=train_data[, 3:30]
+test_data=test_data[, 3:30]
+```
+
+
+##4.4 PCA Analysis
+```{r}
+x <- model.matrix(~., data=data)[,-1]
+pca.x <- prcomp(x, scale=TRUE)
+
+### Plot of variance
+plot(pca.x,main="PCA: Variance Explained by Factors")
+mtext(side=1, "Factors",  line=1, font=2)
+```
+###a) Principal component I
+```{r}
+loadings <- pca.x$rotation[,1:5]
+v<-loadings[order(abs(loadings[,1]), decreasing=TRUE)[1:ncol(x)],1]
+loadingfit <- lapply(1:ncol(x), function(r) ( t(v[1:r])%*%v[1:r] - 0.5 )^2)
+
+#Retirees
+data.frame(t(v[1:which.min(loadingfit)]))
+```
+###b) Principal component II
+```{r}
+v<-loadings[order(abs(loadings[,2]), decreasing=TRUE)[1:ncol(x)],2]
+loadingfit <- lapply(1:ncol(x), function(k) ( t(v[1:k])%*%v[1:k] - 0.5)^2)
+
+#Well educated people with high income and high loan annuity
+data.frame(t(v[1:which.min(loadingfit)]))
+```
+###c) Principal component III
+```{r}
+v<-loadings[order(abs(loadings[,3]), decreasing=TRUE)[1:ncol(x)],3]
+loadingfit <- lapply(1:ncol(x), function(k) ( t(v[1:k])%*%v[1:k] - 0.5)^2)
+
+#Married people
+data.frame(t(v[1:which.min(loadingfit)]))
+```
+
+#5.Evaluation 
+
+##5.1 Cross Validation
+```{r}
+cross_v_data<-train_data
+n <- nrow(cross_v_data)
+Mx <- model.matrix(Default ~ ., data = cross_v_data)[,-1]
+My<- cross_v_data$Default == "1"
+```
+
+```{r}
+#Logistic Regression, classification tree, Random Forest
+nfold <- 5
+OOS <- data.frame(accuracy_lr = rep(NA, nfold),R2_lr = rep(NA, nfold))  
+foldid <- rep(1:nfold,each=ceiling(n/nfold))[sample(1:n)]
+
+#The four model that we intially tested were:  Logistic, Regression, Classification Tree and Random forest. 
+for(k in 1:nfold){ 
+  train <- which(foldid!=k) # train on all but fold `k'
+  
+  #Logistic regression
+  m.lr <-glm(Default~., data=cross_v_data, subset=train,family="binomial")
+  pred.lr <- predict(m.lr, newdata=cross_v_data[-train,], type="response")
+  pred.lr_results<-PerformanceMeasure(actual=My[-train], pred=pred.lr)
+  OOS$accuracy_lr[k] <- PerformanceMeasure(actual=My[-train], pred=pred.lr)$accuracy
+  OOS$R2_lr[k] <- PerformanceMeasure_R2(actual=My[-train], pred=pred.lr)$R2
+  
+  ### the classification tree
+  m.tree <- tree(Default~ ., data=cross_v_data, subset=train) 
+  pred.tree <- predict(m.tree, newdata=cross_v_data[-train,], type="vector")
+  pred.tree <- pred.tree[,2]
+  OOS$accuracy_tree[k] <- PerformanceMeasure(actual=My[-train], pred=pred.tree)$accuracy
+  OOS$R2_tree[k] <- PerformanceMeasure_R2(actual=My[-train], pred=pred.tree)$R2
+  
+  ### random forest
+  m.rf <- randomForest(Default~., data=cross_v_data, subset=train, nodesize=5, ntree = 1000, mtry = 4)
+  pred.rf <- predict(m.rf,type = "prob")[,2]
+
+  OOS$accuracy_rf[k] <- PerformanceMeasure(actual = My[-train], prediction = pred.rf)$accuracy
+  OOS$R2_rf[k] <- PerformanceMeasure_R2(actual=My[-train], pred=pred.rf)$R2
+  
+  print(paste("Iteration",k,"of",nfold,"completed"))
+} 
+```
+
+```{r}
+# Calculation of the means for accuracy
+accuracy_means <- colMeans(OOS[, c("accuracy_tree", "accuracy_lr", "accuracy_rf")])
+
+# Plot the accuracy for all the models
+barplot(accuracy_means, 
+        las = 2, 
+        xpd = FALSE, 
+        ylim = c(0.975 * min(accuracy_means), max(accuracy_means)), 
+        names.arg = c("Tree", "LR", "RF"), 
+        main = "Accuracy Comparison")
+```
+
+```{r}
+#Calculation of the mean of R2
+R2_means <- colMeans(OOS[, c("R2_tree","R2_lr", "R2_rf")], na.rm = TRUE)
+
+# Plot the R2 for the three models
+barplot(R2_means, 
+        las = 3, 
+        xpd = FALSE, 
+        ylim = c(0.975 * min(R2_means), max(R2_means)), 
+        names.arg = c("Tree", "LR", "RF"), 
+        main = "R2 Comparison")
+```
+
+##5.2 Logistic Regression
+```{r}
+n <- nrow(test_data)
+My<- test_data$Default == "1"
+m.lr <-glm(Default~., data=train_data, subset=train,family="binomial")
+```
+
+
+```{r}
+#Analyzing probability of default
+exp_coeff<- sort(exp(coef(m.lr)), decreasing = TRUE)
+data.frame(probability_of_default=(exp_coeff/(1+exp_coeff)))
+```
+```{r}
+#Establishing our predictions
+pred.lr <- predict(m.lr, newdata=test_data, type="response")
+test_data$predictors<-pred.lr
+```
+
+```{r}
+#Evalution of our model using a profit calculation
+calculate_profit <- function(threshold, test_data) {
+  
+  #The Confusion Matrix will depend on the threshold we choose for our probability
+  test_data$Default_Predictor <- ifelse(test_data$predictors > threshold, "Yes", "No")
+  
+  test_data$TP <- ifelse(test_data$Default == 1 & test_data$Default_Predictor == "Yes", 1, 0)
+  test_data$TN <- ifelse(test_data$Default == 0 & test_data$Default_Predictor == "No", 1, 0)
+  test_data$FP <- ifelse(test_data$Default == 0 & test_data$Default_Predictor == "Yes", 1, 0)
+  test_data$FN <- ifelse(test_data$Default == 1 & test_data$Default_Predictor == "No", 1, 0)
+  
+  #Our Gains  will come from all of the True Negative results, Loans we accurately predicted that did not Default
+  test_data$Gains <- test_data$TN*test_data$Loan_Annuity
+  
+  #Our costs come from False negative results. People we predicted that wouldn't Default but they end up defaulting
+  test_data$Cost <- (test_data$FN*0.6*test_data$Credit_Amount)
+   
+  #Our gross profit comes from the Gains - costs
+  test_data$Profit <- test_data$Gains - test_data$Cost
+  
+  return(sum(test_data$Profit))
+}
+
+thresholds <- seq(0, 1, by = 0.001)
+profits <- sapply(thresholds, calculate_profit, test_data = test_data)
+profits_in_millions <- profits / 1e6
+
+# Plotting profit vs threshold with profits in millions
+plot(thresholds, profits_in_millions, type="l", xlab = "Threshold", 
+     ylab = "Profit (Millions)", main = " Gross Profit (in Millions) vs Default Rate Threshold", las = 1)
+```
+
+```{r}
+#gathering information on when and how much are our max profits 
+max_profit_index <- which.max(profits_in_millions)
+max_threshold <- thresholds[max_profit_index]
+max_profit <- profits_in_millions[max_profit_index]
+max_threshold
+max_profit
+```
+
+```{r}
+#Recaulculating our prift to show how it moves with more precision
+thresholds <- seq(0.04, 0.1, by = 0.0005)
+profits <- sapply(thresholds, calculate_profit, test_data = test_data)
+profits_in_millions <- profits / 1e6
+
+# Plotting profit vs threshold with profits in millions
+plot(thresholds, profits_in_millions, type="l", xlab = "Threshold", 
+     ylab = "Profit (Millions)", main = "Gross Profit (in Millions) vs Default Rate Threshold", las = 1)
+```
+
+```{r}
+confusion_matrix <- function(threshold, test_data) {
+  
+  test_data$Default_Predictor <- ifelse(test_data$predictors > threshold, "Yes", "No")
+  
+  TP <- sum(test_data$Default == 1 & test_data$Default_Predictor == "Yes")
+  TN <- sum(test_data$Default == 0 & test_data$Default_Predictor == "No")
+  FP <- sum(test_data$Default == 0 & test_data$Default_Predictor == "Yes")
+  FN <- sum(test_data$Default == 1 & test_data$Default_Predictor == "No")
+
+  
+  confusion_mat <- matrix(c(TP, FP, FN, TN), nrow = 2, byrow = TRUE)
+  colnames(confusion_mat) <- c("Actual Default", " No Default")
+  rownames(confusion_mat) <- c("No Loan approval", "Approve the Loan")
+  
+  return(confusion_mat)
+}
+
+threshold <- max_threshold
+cm <- confusion_matrix(threshold, test_data)
+print(cm)
+```
+
+#5.3 ROC Curve and Lift curve
+```{r}
+roccurve <- roc(p=pred.lr, y=My, bty="n")
+lift <- liftcurve(p=pred.lr,y=My)
+```
+
+
